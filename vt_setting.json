@@ -18,11 +18,13 @@
     "datafeed.username": "",
     "datafeed.password": "",
 
-    "database.timezone": "get_localzone_name()",
+    "database.timezone": "Asia/Shanghai",
     "database.name": "mysql",
-    "database.database": "SZSE",
+    "database.database": "ASTOCK",
     "database.host": "127.0.0.1",
     "database.port": 3306,
     "database.user": "root",
-    "database.password": "123456"
+    "database.password": "123456",
+
+    "short": "False"
 }

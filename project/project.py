@@ -21,29 +21,11 @@ from vnpy_chartwizard import ChartWizardApp
 # 导入策略
 from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 
-def configure_settings():
-    """配置VeighNa设置"""
-    # 数据库配置
-    SETTINGS["database.name"] = "mysql"
-    SETTINGS["database.host"] = "127.0.0.1"
-    SETTINGS["database.port"] = 3306
-    SETTINGS["database.user"] = "root"
-    SETTINGS["database.password"] = "123456"
-    SETTINGS["database.database"] = "SZSE"
-    
-    # 数据服务配置
-    SETTINGS["datafeed.name"] = "akshare"
-    SETTINGS["datafeed.username"] = "license"
-    SETTINGS["datafeed.password"] = "123456"
-    
-    # 界面配置
-    SETTINGS["font.family"] = "微软雅黑"
-    SETTINGS["font.size"] = 12
 
 def main():
     """启动VeighNa UI界面"""
     # 配置设置
-    configure_settings()
+    # init_settings()
     
     # 创建QT应用
     qapp = create_qapp()
@@ -67,7 +49,6 @@ def main():
 
     print(f"最终工作目录: {Path.cwd()}")
 
-    
     # 创建主窗口
     main_window = MainWindow(main_engine, event_engine)
     main_window.showMaximized()
