@@ -19,6 +19,9 @@ from vnpy_datamanager import DataManagerApp
 from vnpy_chartwizard import ChartWizardApp
 
 # 导入策略
+parent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))
+sys.path.append(parent_dir)
+from strategies.monthly_min_market_value_strategy import MonthlyMinMarketValueStrategy
 from strategies.buy_and_hold_strategy import BuyAndHoldStrategy
 
 
