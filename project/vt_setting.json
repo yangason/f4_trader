@@ -1,0 +1,30 @@
+{
+    "font.family": "微软雅黑",
+    "font.size": 12,
+
+    "log.active": "True",
+    "log.level": "CRITICAL",
+    "log.console": "True",
+    "log.file": "True",
+
+    "email.server": "smtp.qq.com",
+    "email.port": 465,
+    "email.username": "",
+    "email.password": "",
+    "email.sender": "",
+    "email.receiver": "",
+
+    "datafeed.name": "akshare",
+    "datafeed.username": "",
+    "datafeed.password": "",
+
+    "database.timezone": "Asia/Shanghai",
+    "database.name": "mysql",
+    "database.database": "ASTOCK",
+    "database.host": "127.0.0.1",
+    "database.port": 3306,
+    "database.user": "root",
+    "database.password": "123456",
+
+    "short": "False"
+}

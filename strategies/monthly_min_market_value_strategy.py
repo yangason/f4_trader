@@ -18,16 +18,16 @@ class MonthlyMinMarketValueStrategy(TargetPosTemplate):
     author = "jack"
 
     initial_capital: int = 1000000  # 初始资金
-    parameters = ["initial_capital"]
+    current_month: int = 1
+    parameters = ["initial_capital", "current_month"]
     
 
     # 策略参数
     def __init__(self, cta_engine, strategy_name: str, vt_symbol: str, setting: dict):
         """构造函数"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
-        self.current_month = 0
+        self.current_month = setting['current_month']
         self.buyed = False
-        self.season = 0
         self.bar_of_yesterday = None
 
     def on_init(self) -> None:
@@ -74,9 +74,19 @@ class MonthlyMinMarketValueStrategy(TargetPosTemplate):
             capital = self.initial_capital
             size = self.get_size()
             target_pos = capital // (size * bar.close_price)
-            print(f"日期: {bar.datetime}, 当前资金: {capital}, 交易单位: {size}, 目标仓位: {target_pos}, 目标价格: {bar.close_price}")
             self.set_target_pos(target_pos)
+            print(f"日期: {bar.datetime}, 当前资金: {capital}, 交易单位: {size}, 目标仓位: {target_pos}, 目标价格: {bar.close_price}")
             self.buyed = True
+
+        can_sell = True
+        if self.bar_of_yesterday.close_price * 0.91 >= bar.low_price and bar.low_price == bar.high_price:
+            print(f'封板: {bar.symbol}, 日期: {bar.datetime}, 当前价格: {bar.close_price}')
+            can_sell = False
+        if self.buyed and can_sell and bar.datetime.month > self.current_month:
+            target_pos = 0
+            self.set_target_pos(0)
+            print(f"日期: {bar.datetime}, 交易单位: {self.pos - target_pos}, 目标仓位: {target_pos}, 目标价格: {bar.close_price}")
+            self.current_month = bar.datetime.month
         
         self.bar_of_yesterday = bar
         
