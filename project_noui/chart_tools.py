@@ -27,28 +27,38 @@ def singleton(cls):
 
 @singleton
 class Data():
-    def __init__(self):
-        self.bar_data_dict = defaultdict(pd.DataFrame)
+    def __init__(self, start_date: datetime = None, end_date: datetime = None):
         self.tech_data_dict = dict()
         self.trade_data_dict = defaultdict(pd.DataFrame)
 
-        self.end = None
-        self.start = None
+        self.end_date = end_date
+        self.start_date = start_date
 
-    def update_bar_data(self, vt_symbol: str, df: pd.DataFrame):
-        self.bar_data_dict[vt_symbol] = df
+    def set_start_date(self, start_date: datetime):
+        self.start_date = start_date
 
-    def get_bar_data(self, vt_symbol: str) -> pd.DataFrame:
-        pass
+    def set_end_date(self, end_date: datetime):
+        self.end_date = end_date
 
     def update_tech_data(self, vt_symbol: str, metric: str, df: pd.DataFrame):
         self.tech_data_dict[vt_symbol] = {metric: df}
+
+    def add_tech_data(self, vt_symbol: str, metric: str, df: pd.DataFrame):
+        empty_df = pd.DataFrame()
+        data_dict = self.tech_data_dict.get(vt_symbol, dict())
+        old_df = data_dict.get(metric, empty_df)
+        self.tech_data_dict[vt_symbol] = {metric: pd.concat([old_df, df])}
 
     def get_tech_data(self, vt_symbol: str, metric:str) -> pd.DataFrame:
         pass
 
     def update_trade_data(self, vt_symbol: str, df: pd.DataFrame):
         self.trade_data_dict[vt_symbol] = df
+
+    def add_trade_data(self, vt_symbol: str, df: pd.DataFrame):
+        empty_df = pd.DataFrame()
+        old_df = self.trade_data_dict.get(vt_symbol, empty_df)
+        self.trade_data_dict[vt_symbol] = pd.concat([old_df, df])
 
     def show_candle(self, vt_symbol: str):
         pass
@@ -64,48 +74,76 @@ data = Data()
 app = dash.Dash(__name__)
 app.layout = html.Div([
     # html.H1("candle图", style={'textAlign': 'center'}),
-    
+    dcc.Interval(id='interval-component', interval=10000),
     # 控制面板
-    html.Div([
-        html.Div([
-            html.Label("选择标的:", style={'marginRight': '10px', 'font-size': '16px', 'display': 'inline-block'}),
-            dcc.Dropdown(
-                id='select-target',
-                options=[], 
-                style={'width': '100%', 'height': '100%', 'fontSize': '14px', 'display': 'inline-block'}
-            )
-        ], style={'width': '30%', 'height': '100%','margin': '20px', 'display': 'inline-block'}), 
-        html.Div([
-            html.Label("选择日期范围:", style={'marginRight': '10px', 'font-size': '16px', 'display': 'inline-block'}),
-            dcc.DatePickerRange(
-                id='date-picker-range',
-                minimum_nights=0,  # 允许选择同一天
-                initial_visible_month=date.today(),
-                display_format='YYYY-MM-DD',
-                start_date_placeholder_text="Start Date",
-                end_date_placeholder_text="End Date",
-                calendar_orientation='horizontal',
-                style={'width': '100%', 'height': '100%', 'fontSize': '14px', 'display': 'inline-block'}
-            )
-        ], style={'width': '30%', 'height': '100%','margin': '20px', 'display': 'inline-block'}),    
-    ], 
-    style={'width': '100%', 'padding': '20px', 'backgroundColor': '#f8f9fa'}),
-    html.Div([
-        dcc.Checklist(id='tech-chart-checklist',
-                      options=['Total Pnl', 'Daily Pnl', 'Drawdown'],
-                      value=[],
-                      inline=True
+    html.Div(
+        [
+            html.Div(
+                [
+                    html.Label("选择标的:", style={'marginRight': '10px', 'font-size': '16px', 'display': 'inline-block'}),
+                        dcc.Dropdown(
+                            id='select-target',
+                            options=[], 
+                            style={'width': '100%', 'height': '100%', 'fontSize': '14px', 'display': 'inline-block'}
+                        )
+                ], style={'width': '30%', 'height': '100%','margin': '20px', 'display': 'inline-block'}
+            ), 
+            html.Div(
+                [
+                    html.Label("选择日期范围:", style={'marginRight': '10px', 'font-size': '16px', 'display': 'inline-block'}),
+                    dcc.DatePickerRange(
+                        id='date-picker-range',
+                        minimum_nights=0,  # 允许选择同一天
+                        initial_visible_month=date.today(),
+                        display_format='YYYY-MM-DD',
+                        start_date_placeholder_text="Start Date",
+                        end_date_placeholder_text="End Date",
+                        calendar_orientation='horizontal',
+                        style={'width': '100%', 'height': '100%', 'fontSize': '14px', 'display': 'inline-block'}
                     )
+                ], style={'width': '30%', 'height': '100%','margin': '20px', 'display': 'inline-block'}
+            ),    
+        ], 
+        style={'width': '100%', 'padding': '20px', 'backgroundColor': '#f8f9fa'}
+    ),
+    html.Div([
+        dcc.Checklist(
+                id='tech-chart-checklist',
+                options=['Daily Pnl', 'Drawdown'],
+                value=[],
+                inline=True
+            )
         ],
         style={
             'margin': '20px',
             'padding': '10px'
         }
     ),
-    dcc.Interval(id='interval-component', interval=10000),
-    dcc.Graph(id='candlestick-volumn-chart'),
-    html.Div(id='tech-chart',
-        children=[]
+    html.Div(
+        title='stock',
+        children=[
+            html.Div(
+                children=dcc.Graph(
+                    id='candlestick-volumn-chart'
+                ),
+            ),
+            html.Div(
+                id='tech-chart',
+                children=[]
+            ),
+        ]  
+    ),
+    
+    html.Div(
+        title='strategy',
+        children=[
+            dcc.Graph(
+                id='strategy-balance-chart'
+            ),
+            dcc.Graph(
+                id='strategy-drawdown-chart'
+            )
+        ]
     )
     # # 导出csv
     # dcc.Store(id='annotations-store', data=[])
@@ -125,35 +163,10 @@ def show_tech_chart(value, vt_symbol, start_date, end_date, hover_data):
     symbol_tech_dict: pd.DataFrame = data.tech_data_dict.get(vt_symbol, dict())
     daily_df = symbol_tech_dict.get('daily_df', None)
     if daily_df is not None:
-        if 'Total Pnl' in value:
-            total_pnl = go.Figure()
-            total_pnl.add_trace(go.Bar(
-                x=daily_df.index,
-                y=daily_df['total_pnl'],
-            ))
-            if hover_data is not None and 'points' in hover_data and hover_data['points']:
-                time = hover_data['points'][0]['x']
-                total_pnl.add_shape(
-                    type="line",
-                    x0=time, x1=time,
-                    y0=0, y1=1,
-                    xref="x", yref="paper",
-                    line=dict(color="gray", width=2, dash="dot"),
-                    opacity=0.8
-                )
-            total_pnl.update_xaxes(range=[start_date, end_date])
-            total_pnl.update_layout(
-                margin=dict(t=10, b=10),
-                height=300,
-                width=800,
-            )
-            children.append(dcc.Graph(figure=total_pnl, style={
-                'margin': '10px',
-                'padding': '0'
-            }))
         if 'Daily Pnl' in value:
             net_pnl = go.Figure()
             net_pnl.add_trace(go.Bar(
+                name='Daily Pnl',
                 x=daily_df.index,
                 y=daily_df['net_pnl'],
             ))
@@ -170,8 +183,7 @@ def show_tech_chart(value, vt_symbol, start_date, end_date, hover_data):
             net_pnl.update_xaxes(range=[start_date, end_date])
             net_pnl.update_layout(
                 margin=dict(t=10, b=10),
-                height=300,
-                width=800,
+                autosize = True,
             )
             children.append(dcc.Graph(figure=net_pnl, style={
                 'margin': '10px', 
@@ -180,6 +192,7 @@ def show_tech_chart(value, vt_symbol, start_date, end_date, hover_data):
         if 'Drawdown' in value:
             drawdown = go.Figure()
             drawdown.add_trace(go.Scatter(
+                name='Drawdown',
                 x=daily_df.index,
                 y=daily_df['drawdown'],
             ))
@@ -196,8 +209,7 @@ def show_tech_chart(value, vt_symbol, start_date, end_date, hover_data):
             drawdown.update_xaxes(range=[start_date, end_date])
             drawdown.update_layout(
                 margin=dict(t=10, b=10),
-                height=300,
-                width=800,
+                autosize = True,
             )
             children.append(dcc.Graph(figure=drawdown, style={
                 'margin': '10px', 
@@ -217,10 +229,11 @@ def select_time_range(vt_symbol, start_date, end_date):
     if not vt_symbol:
         return bar_fig
     elif not start_date or not end_date:
-        bar_df: pd.DataFrame = data.bar_data_dict.get(vt_symbol, None)
-    else:
-        print(f'start date: {start_date}, end date: {end_date}, symbol: {vt_symbol}')
-        bar_df = select_target_bars(vt_symbol, Interval.DAILY, start_date, end_date)
+        start_date = data.start_date
+        end_date = data.end_date
+
+    print(f'start date: {start_date}, end date: {end_date}, symbol: {vt_symbol}')
+    bar_df = select_target_bars(vt_symbol, Interval.DAILY, start_date, end_date)
 
     bar_fig = draw_bar(bar_df)
     data.start = bar_df.index[0]
@@ -252,7 +265,7 @@ def select_time_range(vt_symbol, start_date, end_date):
     Input('interval-component', 'n_intervals')
 )
 def trigger_data_update(n_intervals):
-    options = list(data.bar_data_dict.keys())
+    options = list(data.trade_data_dict.keys())
     return options
 
 def draw_bar(bar_df: pd.DataFrame) -> go.Figure:
@@ -285,8 +298,7 @@ def draw_bar(bar_df: pd.DataFrame) -> go.Figure:
             marker_color=color
         ), row=2, col=1)
         bar_fig.update_layout(
-            height=600, 
-            width=800,
+            autosize = True,
             xaxis_rangeslider_visible = False,
             xaxis2_rangeslider=dict(
                 visible=True,
