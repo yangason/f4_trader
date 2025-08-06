@@ -167,7 +167,7 @@ class MonthlyMinMarketValueStrategy(TargetPosTemplate):
         if self.bar_of_yesterday.close_price * 0.91 >= bar.low_price and bar.low_price == bar.high_price:
             # print(f'封板: {bar.symbol}, 日期: {bar.datetime}, 当前价格: {bar.close_price}')
             can_sell = False
-        if self.buyed and can_sell and (bar.datetime.month > self.current_month or self.cal_signal() <= -1):
+        if self.buyed and self.pos > 0 and can_sell and (bar.datetime.month > self.current_month or self.cal_signal() <= -1):
             target_pos = 0
             self.set_target_pos(0)
             print(f"symbol: {bar.symbol}, 日期: {bar.datetime}, 交易单位: {self.pos - target_pos}, 目标仓位: {target_pos}, 目标价格: {bar.close_price}")

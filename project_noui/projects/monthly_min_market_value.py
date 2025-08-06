@@ -7,23 +7,22 @@
 import mysql.connector
 import pandas as pd
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 import sys
 import os
-import copy
 
 # 添加项目根目录到路径
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))
 sys.path.append(parent_dir)
 
-from vnpy.trader.optimize import OptimizationSetting
 from vnpy_ctastrategy.backtesting import BacktestingEngine
 from strategies.monthly_min_market_value_strategy import MonthlyMinMarketValueStrategy
 from tools.common import sum_specified_keep_others
 from project_base import ProjectBase, register_project
+from vnpy.trader.constant import Direction, Offset
 
 class MonthlyMinMarketValueProject(ProjectBase):
-    """每月市值最低策略项目 - 基于vnpy engine"""
+    """每月市值最低策略项目"""
     
     def __init__(self, name: str = "monthly_min_market_value", 
                  initial_capital: float = 1000000,
@@ -40,15 +39,6 @@ class MonthlyMinMarketValueProject(ProjectBase):
         self.initial_capital = initial_capital
         self.current_capital = initial_capital
         self.top_n = top_n
-        
-        # vnpy相关变量
-        self.record_df_dicts = []
-        self.record_candle_dicts = []
-        self.record_engines = []
-        self.integrated_df = pd.DataFrame()
-        self.dfs = []
-        self.total_profits = []
-        self.goods_symbols = []
         
     def create_connection(self):
         """创建MySQL连接"""
@@ -119,7 +109,6 @@ class MonthlyMinMarketValueProject(ProjectBase):
             connection.close()
             
     def convert_list_to_df(self, list_data) -> pd.DataFrame:
-        """转换交易列表为DataFrame"""
         df = pd.DataFrame()
         results = defaultdict(list)
         for data in list_data:
@@ -129,9 +118,9 @@ class MonthlyMinMarketValueProject(ProjectBase):
             df = pd.DataFrame.from_dict(results).set_index('datetime')
         return df
         
-    def run(self, start_date: str, end_date: str, **kwargs):
+    def run(self, start_date: str, end_date: str, **kwargs) -> pd.DataFrame:
         """
-        运行策略 - 保持原有的vnpy engine实现
+        运行策略
         
         Args:
             start_date: 开始日期 (YYYY-MM-DD)
@@ -141,6 +130,7 @@ class MonthlyMinMarketValueProject(ProjectBase):
         # 设置项目运行时间
         self.start_time = datetime.strptime(start_date, '%Y-%m-%d')
         self.end_time = datetime.strptime(end_date, '%Y-%m-%d')
+        record_df = pd.DataFrame()
         print(f"🚀 开始运行项目 {self.name}")
         print(f"📅 时间范围: {start_date} 到 {end_date}")
         
@@ -154,6 +144,7 @@ class MonthlyMinMarketValueProject(ProjectBase):
         
         # 生成月份列表
         month_first_list = []
+        total_profits = []
         current_date = start_day
         
         while current_date <= end_day:
@@ -167,28 +158,19 @@ class MonthlyMinMarketValueProject(ProjectBase):
         print(f"📅 月份列表: {month_first_list}")
         
         # 初始化变量
-        capital = self.initial_capital
-        self.total_profits = []
-        self.record_df_dicts = []
-        self.record_candle_dicts = []
-        self.record_engines = []
-        self.dfs = []
-        self.goods_symbols = []
+        capital = self.initial_capital / 10
+        dfs = []
         
         # 按月份运行策略
         for i in range(len(month_first_list)):
             if i > 0:
-                capital += self.total_profits[i - 1] / 10  # add profit
-                
-            self.record_df_dicts.append({})
-            self.record_candle_dicts.append({})
-            
+                capital += total_profits[i - 1] / 10  # add profit
+                            
             start = month_first_list[i]
             end = month_first_list[i + 1] if i + 1 < len(month_first_list) else end_day
             end = end.replace(month=end.month + 1, day=9) if end.month < 12 else end.replace(year=end.year+1, month=1, day=9)
             
             print(f"\n📅 处理 {start.year}-{start.month:02d}")
-            print(f"开始日期: {start}")
             
             # 获取当月市值最低的股票
             min_market_symbols = self.get_min_market_value(start.year, start.month)
@@ -196,7 +178,7 @@ class MonthlyMinMarketValueProject(ProjectBase):
             
             if not symbols_candidates:
                 print(f"⚠️  {start.year}-{start.month:02d} 未找到符合条件的股票")
-                self.total_profits.append(0)
+                total_profits.append(0)
                 continue
                 
             print(f"📈 候选标的: {symbols_candidates}")
@@ -228,95 +210,43 @@ class MonthlyMinMarketValueProject(ProjectBase):
                 engine.load_data()
                 engine.run_backtesting()
                 df = engine.calculate_result()
-                self.dfs.append(df)
-                
-                self.record_df_dicts[i][symbol["symbol"]] = df
-                self.record_candle_dicts[i][symbol["symbol"]] = engine.history_data
-                
+                dfs.append(df)                
                 res = engine.calculate_statistics(output=False)
-                print(f"📊 策略回测成功: {symbol['symbol']}，总净利润: {res['total_net_pnl']}")
                 
-                # 同步交易记录到ProjectBase
+                # 上传trade数据
                 all_trades = engine.get_all_trades()
+                print(f"📈 交易记录: {all_trades}")
                 for trade in all_trades:
                     self.add_trade(
                         symbol=symbol['symbol'],
-                        direction='LONG' if trade.direction.value == '多' else 'SHORT',
+                        direction='LONG' if trade.direction == Direction.LONG else 'SHORT',
                         price=trade.price,
                         volume=trade.volume,
                         timestamp=trade.datetime,
-                        offset='OPEN' if trade.offset.value == '开' else 'CLOSE'
+                        offset='OPEN' if trade.offset == Offset.OPEN else 'CLOSE'
                     )
                 
-                month_profits.append(res["total_net_pnl"])
-                self.record_engines.append(copy.deepcopy(engine))
-                
-            
-                if res["total_net_pnl"] > 0:
-                    self.goods_symbols.append({
-                        "symbol": symbol["symbol"], 
-                        "total_net_pnl": res["total_net_pnl"]
-                    })
+                month_profits.append(res["total_net_pnl"])                
             
             month_profit = sum(month_profits)
-            self.total_profits.append(month_profit)
+            total_profits.append(month_profit)
             print(f"📈 {start.year}-{start.month}月总净利润: {month_profit}")
-            
-            # 记录月收益到ProjectBase
-            self.add_daily_pnl(start, month_profit)
         
         # 计算综合结果
-        self.integrated_df = sum_specified_keep_others(
-            self.dfs, 
+        record_df = sum_specified_keep_others(
+            dfs, 
             sum_columns=['trade_count', 'turnover', 'commission', 'slippage', 'trading_pnl', 'holding_pnl', 'total_pnl', 'net_pnl']
         )
         
         engine = BacktestingEngine()
-        integrated_result = engine.calculate_statistics(self.integrated_df, output=False, capital=10000000)
+        summary = engine.calculate_statistics(record_df, output=False, capital=self.initial_capital)
         
         print(f"\n🎉 策略运行完成")
-        print(f"💰 总净利润: {sum(self.total_profits)}")
-        print(f"📊 综合统计: {integrated_result}")
-        
-        self.print_summary()
-        
-        # 上传数据到API服务器
+        print(f"💰 总净利润: {sum(total_profits)}")
+        print(f"📊 综合统计: {summary}")
+                
         print(f"\n📤 上传数据到API服务器...")
-        self.upload_data()
-        
-    def get_detailed_summary(self) -> dict:
-        """获取详细摘要信息"""
-        summary = self.get_summary()
-        
-        # 添加vnpy特有的统计信息
-        if hasattr(self, 'integrated_df') and not self.integrated_df.empty:
-            summary.update({
-                'integrated_df_available': True,
-                'total_trades': len(self.trades),  # 使用ProjectBase的交易记录
-                'goods_symbols_count': len(self.goods_symbols),
-                'goods_symbols': self.goods_symbols[:5]  # 只显示前5个盈利股票
-            })
-        else:
-            summary.update({
-                'integrated_df_available': False,
-                'total_trades': len(self.trades),  # 使用ProjectBase的交易记录
-                'goods_symbols_count': 0,
-                'goods_symbols': []
-            })
-            
-        return summary
-        
-    def print_detailed_summary(self):
-        """打印详细摘要"""
-        summary = self.get_detailed_summary()
-        self.print_summary()
-        
-        if summary.get('integrated_df_available'):
-            print(f"📊 详细统计:")
-            print(f"   总交易次数: {summary['total_trades']}")
-            print(f"   盈利股票数量: {summary['goods_symbols_count']}")
-            if summary['goods_symbols']:
-                print(f"   盈利股票示例: {[s['symbol'] for s in summary['goods_symbols']]}")
+        return record_df, summary
 
 
 def main():
@@ -337,8 +267,6 @@ def main():
         end_date="2024-12-31"
     )
     
-    # 打印详细摘要
-    strategy.print_detailed_summary()
 
 
 if __name__ == "__main__":

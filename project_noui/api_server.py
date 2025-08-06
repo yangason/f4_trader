@@ -3,9 +3,14 @@ from flask_cors import CORS
 import mysql.connector
 import pandas as pd
 from datetime import datetime, timedelta
+import time
+from typing import Union
 import json
 import os
 import sys
+from pathlib import Path
+import importlib.util
+import inspect
 
 # 添加项目根目录到路径
 parent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))
@@ -17,36 +22,11 @@ from datetime import datetime, timedelta
 from vnpy.trader.constant import Interval
 
 # 导入项目基础类
-try:
-    from project_base import PROJECT_REGISTER, get_project, list_projects, register_project
-except ImportError as e:
-    print(f"⚠️  导入project_base模块失败: {e}")
-    # 如果导入失败，创建空的注册表
-    PROJECT_REGISTER = {}
-    def get_project(name):
-        return PROJECT_REGISTER.get(name)
-    def list_projects():
-        return list(PROJECT_REGISTER.keys())
-    def register_project(project):
-        PROJECT_REGISTER[project.name] = project
+from project_base import PROJECT_REGISTER, get_project, list_projects, register_project, ProjectBase
 
 # 导入技术指标工具
-try:
-    from indicator_tools import calculate_indicators_from_bars
-    print("✅ 成功导入技术指标工具")
-except ImportError as e:
-    print(f"⚠️  导入技术指标工具失败: {e}")
-    calculate_indicators_from_bars = None
+from indicator_tools import calculate_indicators_from_bars
 
-# 尝试导入策略项目（可能因为依赖问题失败）
-MonthlyMinMarketValueProject = None
-try:
-    from monthly_min_market_value import MonthlyMinMarketValueProject
-    print("✅ 成功导入MonthlyMinMarketValueProject")
-except ImportError as e:
-    print(f"⚠️  导入MonthlyMinMarketValueProject失败: {e}")
-    print("   这通常是因为缺少依赖包或导入路径问题")
-    print("   项目注册功能将不可用，但其他功能正常")
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
@@ -61,37 +41,54 @@ class Data:
 
 data = Data()
 
-def auto_register_projects():
-    """自动注册所有可用的项目"""
-    try:
-        print("📋 开始自动注册项目...")
-        
-        # 注册每月市值最低策略（如果可用）
-        if MonthlyMinMarketValueProject is not None:
-            monthly_strategy = MonthlyMinMarketValueProject(
-                name="monthly_min_market_value",
-                initial_capital=1000000,
-                top_n=10
-            )
-            register_project(monthly_strategy)
-            print(f"✅ 已注册项目: {monthly_strategy.name}")
-        else:
-            print("⚠️  MonthlyMinMarketValueProject不可用，跳过注册")
-            print("   请检查依赖包或导入路径")
-            return
-        
-        # 可以在这里添加更多项目的自动注册
-        # 例如：
-        # other_strategy = OtherStrategyProject(name="other_strategy")
-        # register_project(other_strategy)
-        # print(f"✅ 已注册项目: {other_strategy.name}")
-        
-        print(f"📊 项目注册完成，共 {len(PROJECT_REGISTER)} 个项目")
-        print(f"   已注册项目: {list(PROJECT_REGISTER.keys())}")
-        
-    except Exception as e:
-        print(f"❌ 自动注册项目失败: {e}")
-        print("   这可能是由于依赖包缺失或配置问题")
+def auto_register_projects(directory: str,
+                      *,
+                      base_class: type | None = ProjectBase,   # 限定必须继承某个基类；None 表示不限制
+                      recursive: bool = True) -> None:
+    """
+    扫描目录 -> 动态导入模块 -> 找出类 -> 构造对象 -> 调用 register_project
+    """
+    if not directory:
+        directory = os.path.join(os.path.dirname(__file__), "projects")
+    
+    dir_path = Path(directory).resolve()
+    sys.path.insert(0, str(dir_path))
+
+    pattern = "**/*.py" if recursive else "*.py"
+    for file in dir_path.glob(pattern):
+        if file.name.startswith("_"):
+            continue
+
+        module_name = f"_auto_{file.stem}_{file.stat().st_ino}"
+        spec = importlib.util.spec_from_file_location(module_name, file)
+        if spec is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+
+        try:
+            assert isinstance(spec.loader, importlib.abc.Loader)
+            spec.loader.exec_module(module)
+        except Exception as e:
+            print(f"[WARN] 加载 {file} 失败: {e}")
+            continue
+
+        for _, cls in inspect.getmembers(module, inspect.isclass):
+            if cls.__module__ != module.__name__:
+                continue
+            if base_class is not None and not issubclass(cls, base_class):
+                print(f"[WARN] {cls} 不是 {base_class} 的子类, 跳过")
+                continue
+            try:
+                obj = cls()
+            except TypeError as e:
+                print(f"[WARN] 实例化 {cls} 失败: {e}")
+                continue
+
+            try:
+                register_project(obj)
+            except Exception as e:
+                print(f"[WARN] register_project 调用失败: {e}")
 
 def select_target_bars_direct(symbol, start_date, end_date):
     """直接查询数据库获取K线数据"""
@@ -99,12 +96,18 @@ def select_target_bars_direct(symbol, start_date, end_date):
         connection = create_mysql_connection()
         if not connection:
             return None
+
+        table = None
+        if symbol.startswith('000') or symbol.startswith('399') or symbol.startswith('688') or symbol.startswith('60'):
+            table = 'daily_hfq'            
+        else:
+            table = 'zh_index'
         
         cursor = connection.cursor()
-        query = """
+        query = f"""
         SELECT datetime, open_price, high_price, low_price, close_price, volume, turnover
-        FROM daily 
-        WHERE symbol = %s AND datetime BETWEEN %s AND %s 
+        FROM `{table}` 
+        WHERE symbol = %s AND datetime >= %s AND datetime < %s 
         ORDER BY datetime
         """
         cursor.execute(query, (symbol, start_date, end_date))
@@ -140,8 +143,8 @@ def create_mysql_connection():
         print(f"连接MySQL失败: {e}")
         return None
 
-@app.route('/api/stocks', methods=['GET'])
-def get_stocks():
+@app.route('/api/zh_stocks', methods=['GET'])
+def get_zh_stocks():
     """获取所有可用的股票列表"""
     try:
         connection = create_mysql_connection()
@@ -149,18 +152,37 @@ def get_stocks():
             return jsonify({'error': '数据库连接失败'}), 500
         
         cursor = connection.cursor()
-        cursor.execute("SELECT DISTINCT symbol FROM daily ORDER BY symbol")
+        cursor.execute("SELECT DISTINCT symbol FROM daily_hfq ORDER BY symbol")
         stocks = [row[0] for row in cursor.fetchall()]
         
         cursor.close()
         connection.close()
         
-        return jsonify({'stocks': stocks})
+        return jsonify({'symbols': stocks})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/bars', methods=['GET'])
-def get_bars():
+@app.route('/api/zh_indexs', methods=['GET'])
+def get_zh_indexs():
+    """获取所有可用的指数列表"""
+    try:
+        connection = create_mysql_connection()
+        if not connection:
+            return jsonify({'error': '数据库连接失败'}), 500
+        
+        cursor = connection.cursor()
+        cursor.execute("SELECT DISTINCT symbol FROM zh_index ORDER BY symbol")
+        indexs = [row[0] for row in cursor.fetchall()]
+        
+        cursor.close()
+        connection.close()
+        
+        return jsonify({'symbols': indexs})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/zh_stocks/bars', methods=['GET'])
+def get_zh_stocks_bars():
     """获取K线数据"""
     try:
         symbol = request.args.get('symbol')
@@ -181,7 +203,57 @@ def get_bars():
         cursor = connection.cursor()
         query = """
         SELECT datetime, open_price, high_price, low_price, close_price, volume, turnover
-        FROM daily 
+        FROM daily_hfq 
+        WHERE symbol = %s AND datetime >= %s AND datetime < %s 
+        ORDER BY datetime
+        """
+        cursor.execute(query, (symbol, start_dt, end_dt))
+        results = cursor.fetchall()
+        cursor.close()
+        connection.close()
+        
+        # 转换为DataFrame
+        df = pd.DataFrame(results, columns=['datetime', 'open_price', 'high_price', 'low_price', 'close_price', 'volume', 'turnover'])
+        df.set_index('datetime', inplace=True)
+        
+        bars_data = []
+        for index, row in df.iterrows():
+            bars_data.append({
+                'time': int(index.timestamp()),
+                'open': float(row['open_price']),
+                'high': float(row['high_price']),
+                'low': float(row['low_price']),
+                'close': float(row['close_price']),
+                'volume': float(row['volume'])
+        })
+
+        return jsonify({'bars': bars_data})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/zh_indexs/bars', methods=['GET'])
+def get_zh_indexs_bars():
+    """获取K线数据"""
+    try:
+        symbol = request.args.get('symbol')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        if not symbol or not start_date or not end_date:
+            return jsonify({'error': '缺少必要参数'}), 400
+        
+        # 转换日期格式
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        
+        connection = create_mysql_connection()
+        if not connection:
+            return None
+        
+        cursor = connection.cursor()
+        query = """
+        SELECT datetime, open_price, high_price, low_price, close_price, volume, turnover
+        FROM zh_index 
         WHERE symbol = %s AND datetime >= %s AND datetime < %s 
         ORDER BY datetime
         """
@@ -205,138 +277,53 @@ def get_bars():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/volume', methods=['GET'])
-def get_volume():
-    """获取成交量数据"""
+@app.route('/api/trades/<project_name>/symbol_list', methods=['GET'])
+def get_trades_symbol_list(project_name):
+    """获取交易数据"""
     try:
-        symbol = request.args.get('symbol')
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
+        project = get_project(project_name)
+        if not project:
+            return jsonify({'error': f'项目 {project_name} 不存在'}), 404
         
-        if not symbol or not start_date or not end_date:
-            return jsonify({'error': '缺少必要参数'}), 400
-        
-        # 转换日期格式
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-        
-        # 查询成交量数据
-        connection = create_mysql_connection()
-        if not connection:
-            return jsonify({'error': '数据库连接失败'}), 500
-        
-        cursor = connection.cursor()
-        query = """
-        SELECT datetime, volume, turnover 
-        FROM daily 
-        WHERE symbol = %s AND datetime >= %s AND datetime < %s 
-        ORDER BY datetime
-        """
-        cursor.execute(query, (symbol, start_dt, end_dt))
-        
-        volume_data = []
-        for row in cursor.fetchall():
-            volume_data.append({
-                'time': int(row[0].timestamp()),
-                'volume': float(row[1]),
-                'turnover': float(row[2]) if row[2] else 0
-            })
-        
-        cursor.close()
-        connection.close()
-        return jsonify({'volume': volume_data})
+        trades_data = data.trade_data_dict.get(project_name, [])
+        trades_symbol_list = set()
+        for rec in trades_data:
+            trades_symbol_list.add(rec['symbol'])
+
+        return jsonify({'trades_symbol_list': list(trades_symbol_list)})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/trades', methods=['GET'])
-def get_trades():
+@app.route('/api/trades/<project_name>/data', methods=['GET'])
+def get_trades_data(project_name):
     """获取交易数据"""
     try:
         symbol = request.args.get('symbol')
-        
         if not symbol:
-            return jsonify({'error': '缺少股票代码参数'}), 400
+            return jsonify({'error': '缺少标的代码参数'}), 400
         
+        project = get_project(project_name)
+        if not project:
+            return jsonify({'error': f'项目 {project_name} 不存在'}), 404
+                
         # 从全局数据对象获取交易数据
-        trade_df = data.trade_data_dict.get(symbol, pd.DataFrame())
+        trade_data = data.trade_data_dict.get(project_name, [])
         
-        if trade_df.empty:
+        if not trade_data:
             return jsonify({'trades': []})
         
-        trades_data = []
-        for index, row in trade_df.iterrows():
-            trades_data.append({
-                'time': int(index.timestamp()),
-                'price': float(row['price']),
-                'volume': float(row['volume']),
-                'direction': str(row['direction']),
-                'offset': str(row['offset'])
+        symbol_trades_data = [rec for rec in trade_data if rec['symbol'] == symbol]
+        result = []
+        for rec in symbol_trades_data:
+            result.append({
+                'time': int(rec['time']),
+                'price': float(rec['price']),
+                'volume': float(rec['volume']),
+                'direction': str(rec['direction']),
+                'offset': str(rec['offset'])
             })
         
-        return jsonify({'trades': trades_data})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/strategy_data', methods=['GET'])
-def get_strategy_data():
-    """获取策略数据"""
-    try:
-        symbol = request.args.get('symbol')
-        
-        if not symbol:
-            return jsonify({'error': '缺少股票代码参数'}), 400
-        
-        # 从全局数据对象获取策略数据
-        tech_data = data.tech_data_dict.get(symbol, {})
-        
-        # 检查是否有直接的balance和drawdown数据
-        if 'balance' in tech_data and 'drawdown' in tech_data:
-            strategy_data = {
-                'daily_pnl': tech_data.get('daily_df', []),
-                'balance': tech_data.get('balance', []),
-                'drawdown': tech_data.get('drawdown', [])
-            }
-            return jsonify({'strategy_data': strategy_data})
-        
-        # 传统的DataFrame处理方式
-        daily_df = tech_data.get('daily_df', pd.DataFrame())
-        
-        if isinstance(daily_df, list):
-            # 如果是列表格式，直接返回
-            strategy_data = {
-                'daily_pnl': daily_df,
-                'balance': tech_data.get('balance', []),
-                'drawdown': tech_data.get('drawdown', [])
-            }
-            return jsonify({'strategy_data': strategy_data})
-        
-        if daily_df.empty:
-            return jsonify({'strategy_data': {}})
-        
-        strategy_data = {
-            'daily_pnl': [],
-            'drawdown': [],
-            'cumulative_pnl': []
-        }
-        
-        for index, row in daily_df.iterrows():
-            strategy_data['daily_pnl'].append({
-                'time': int(index.timestamp()),
-                'value': float(row['net_pnl']) if 'net_pnl' in row else 0
-            })
-            
-            strategy_data['drawdown'].append({
-                'time': int(index.timestamp()),
-                'value': float(row['drawdown']) if 'drawdown' in row else 0
-            })
-            
-            if 'cumulative_pnl' in row:
-                strategy_data['cumulative_pnl'].append({
-                    'time': int(index.timestamp()),
-                    'value': float(row['cumulative_pnl'])
-                })
-        
-        return jsonify({'strategy_data': strategy_data})
+        return jsonify({'trades': result})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -345,14 +332,18 @@ def update_strategy_data():
     """更新策略数据"""
     try:
         request_data = request.get_json()
-        symbol = request_data.get('symbol')
+        project_name = request_data.get('project_name')
         tech_data = request_data.get('tech_data', {})
         trade_data = request_data.get('trade_data', [])
         
-        if symbol:
+        if project_name:
+            project = get_project(project_name)
+            if not project:
+                return jsonify({'error': f'项目 {project_name} 不存在'}), 404
+            
             # 更新技术数据
             if tech_data:
-                data.tech_data_dict[symbol] = tech_data
+                data.tech_data_dict[project_name] = tech_data
             
             # 更新交易数据
             if trade_data:
@@ -360,14 +351,19 @@ def update_strategy_data():
                 if not trade_df.empty:
                     trade_df['datetime'] = pd.to_datetime(trade_df['time'], unit='s')
                     trade_df.set_index('datetime', inplace=True)
-                    data.trade_data_dict[symbol] = trade_df
+                    
+            for rec, dt in zip(trade_data, trade_df.index):
+                rec['datetime'] = str(dt)
+            data.trade_data_dict[project_name] = trade_data
         
         return jsonify({'success': True})
     except Exception as e:
+        print(f'update_strategy_data failed: {e}')
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/indicators', methods=['GET'])
-def get_indicators():
+@app.route('/api/zh_stocks/indicators', methods=['GET'])
+@app.route('/api/zh_indexs/indicators', methods=['GET'])
+def get_target_indicators():
     """获取技术指标数据"""
     try:
         symbol = request.args.get('symbol')
@@ -394,11 +390,6 @@ def get_indicators():
             return jsonify({'error': '未找到数据'}), 404
         
         print(f"✅ 获取到K线数据: {len(bars_df)} 条")
-        
-        # 检查技术指标工具是否可用
-        if calculate_indicators_from_bars is None:
-            print("❌ 技术指标工具不可用")
-            return jsonify({'error': '技术指标工具不可用'}), 500
         
         # 转换DataFrame为bars_data格式
         bars_data = []
@@ -428,48 +419,44 @@ def get_indicators():
             end_timestamp = end_dt.timestamp()
             
             for key in all_indicators.keys():
-                if key == 'macd':
-                    # MACD是一个包含多个子系列的字典
-                    macd_data = all_indicators[key]
-                    if isinstance(macd_data, dict):
-                        clean_all_indicators[key] = {
-                            'macd': [item for item in macd_data.get('macd', []) if item['time'] < end_timestamp],
-                            'signal': [item for item in macd_data.get('signal', []) if item['time'] < end_timestamp],
-                            'histogram': [item for item in macd_data.get('histogram', []) if item['time'] < end_timestamp]
-                        }
-                    else:
-                        # 如果不是字典格式，按普通数组处理
-                        clean_all_indicators[key] = [daily_value for daily_value in macd_data if daily_value['time'] < end_timestamp and daily_value['time'] >= start_dt.timestamp()]
-                else:
-                    # 其他指标是简单的数组格式
-                    clean_all_indicators[key] = [daily_value for daily_value in all_indicators[key] if daily_value['time'] < end_timestamp and daily_value['time'] >= start_dt.timestamp()]
+                clean_all_indicators[key] = [daily_value for daily_value in all_indicators[key] if daily_value['time'] < end_timestamp and daily_value['time'] >= start_dt.timestamp()]
 
             print(f"✅ 计算指标完成: {list(clean_all_indicators.keys())}")
             
             # 打印过滤后的数据统计
             for key, data in clean_all_indicators.items():
-                if key == 'macd' and isinstance(data, dict):
-                    print(f"   {key}: MACD={len(data.get('macd', []))}, Signal={len(data.get('signal', []))}, Histogram={len(data.get('histogram', []))}")
-                else:
-                    print(f"   {key}: {len(data)} 条数据")
+                print(f"   {key}: {len(data)} 条数据")
                     
         except Exception as e:
             print(f"❌ 计算指标失败: {e}")
             return jsonify({'error': f'计算指标失败: {str(e)}'}), 500
         
         # 根据请求的指标类型返回数据
-        if indicator in clean_all_indicators:
+        if indicator == 'all_ma':
+            ma_results = {
+                'ma5': clean_all_indicators['ma5'],
+                'ma10': clean_all_indicators['ma10'],
+                'ma20': clean_all_indicators['ma20'],
+                'ma60': clean_all_indicators['ma60']
+            }
+            print(f"✅ 返回MA数据: MA={len(ma_results)}")
+            return jsonify({'indicator': ma_results})
+        elif indicator == 'macd':
+            # MACD返回多个系列
+            if 'macd' in clean_all_indicators.keys() and 'signal' in clean_all_indicators.keys() and 'histogram' in clean_all_indicators.keys():
+                result = {
+                    'macd': clean_all_indicators['macd'],
+                    'signal': clean_all_indicators['signal'],
+                    'histogram': clean_all_indicators['histogram']
+                }
+                print(f"✅ 返回MACD数据: MACD={len(result['macd'])}, Signal={len(result['signal'])}, Histogram={len(result['histogram'])}")
+                return jsonify({'indicator': result})
+            else:
+                return jsonify({'error': 'MACD数据不可用'}), 500
+        elif indicator in clean_all_indicators.keys():
             indicator_data = clean_all_indicators[indicator]
             print(f"✅ 返回指标数据: {indicator}, 数据条数: {len(indicator_data)}")
             return jsonify({'indicator': indicator_data})
-        elif indicator == 'macd':
-            # MACD返回多个系列
-            if 'macd' in clean_all_indicators:
-                macd_data = clean_all_indicators['macd']
-                print(f"✅ 返回MACD数据: MACD={len(macd_data['macd'])}, Signal={len(macd_data['signal'])}, Histogram={len(macd_data['histogram'])}")
-                return jsonify({'indicator': macd_data})
-            else:
-                return jsonify({'error': 'MACD数据不可用'}), 500
         else:
             print(f"❌ 不支持的指标类型: {indicator}")
             return jsonify({'error': f'不支持的指标类型: {indicator}'}), 400
@@ -495,7 +482,7 @@ def get_projects():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/project/<project_name>', methods=['GET'])
-def get_project_data(project_name):
+def get_project_summary(project_name):
     """获取指定项目的数据"""
     try:
         project = get_project(project_name)
@@ -508,23 +495,23 @@ def get_project_data(project_name):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/project/<project_name>/data', methods=['GET'])
-def get_project_strategy_data(project_name):
+def get_project_data(project_name):
     """获取指定项目的策略数据"""
     try:
-        project = get_project(project_name)
-        if not project:
-            return jsonify({'error': f'项目 {project_name} 不存在'}), 404
         
         # 返回策略数据
+        print(f"data.tech_data_dict[project_name]: {data.tech_data_dict[project_name]}")
         strategy_data = {
-            'daily_pnl': project.daily_pnl,
-            'drawdown': project.drawdown,
-            'balance': project.balance,
-            'trades': project.trades
+            'time': data.tech_data_dict[project_name]['time'],
+            'daily_pnl': data.tech_data_dict[project_name]['daily_pnl'],
+            'balance': data.tech_data_dict[project_name]['balance'],
+            'trades': data.trade_data_dict[project_name],
+            'drawdown': data.tech_data_dict[project_name]['drawdown']
         }
         
         return jsonify({'strategy_data': strategy_data})
     except Exception as e:
+        print(f"❌ 获取项目数据失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/run_project', methods=['POST'])
@@ -549,7 +536,19 @@ def run_project():
         print(f"✅ 找到项目: {project_name}")
         
         # 运行项目
-        project.run(start_date, end_date)
+        record_df, summary = project.run(start_date, end_date)
+        date_list = record_df.index.tolist()
+        timestamp_list = [int(time.mktime(date.timetuple())) for date in date_list]
+        project.end_balance = summary['end_balance'].item()
+        project.max_drawdown = summary['max_drawdown'].item()
+        project.max_drawdown_duration = summary['max_drawdown_duration'].item()
+        project.total_net_pnl = summary['total_net_pnl'].item()
+        project.sharpe_ratio = summary['sharpe_ratio'].item()
+        project.time = timestamp_list
+        project.daily_pnl = record_df['net_pnl'].tolist()
+        project.balance = (record_df['net_pnl'].cumsum() + project.initial_capital).tolist()
+        project.drawdown = record_df['drawdown'].tolist()
+        project.upload_data()
         
         print(f"🎉 项目 {project_name} 运行完成")
         return jsonify({'success': True, 'message': f'项目 {project_name} 运行完成'})
@@ -557,38 +556,6 @@ def run_project():
         print(f"❌ 运行项目失败: {e}")
         import traceback
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/register_project', methods=['POST'])
-def register_project_api():
-    """手动注册项目"""
-    try:
-        data = request.get_json()
-        project_type = data.get('project_type')
-        project_name = data.get('project_name')
-        
-        if not project_type or not project_name:
-            return jsonify({'error': '缺少必要参数'}), 400
-        
-        # 根据项目类型创建项目实例
-        if project_type == 'monthly_min_market_value':
-            if MonthlyMinMarketValueProject is None:
-                return jsonify({'error': 'MonthlyMinMarketValueProject不可用，请检查依赖包'}), 500
-            project = MonthlyMinMarketValueProject(
-                name=project_name,
-                initial_capital=data.get('initial_capital', 1000000),
-                top_n=data.get('top_n', 10)
-            )
-            register_project(project)
-            return jsonify({
-                'success': True, 
-                'message': f'项目 {project_name} 注册成功',
-                'project': project.get_summary()
-            })
-        else:
-            return jsonify({'error': f'不支持的项目类型: {project_type}'}), 400
-            
-    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/reload_projects', methods=['POST'])
@@ -610,14 +577,8 @@ def reload_projects():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    print("🚀 启动简化版API服务器 (端口8800)...")
+    print("🚀 启动API服务器 (端口8800)...")
     
-    # 自动注册项目
-    auto_register_projects()
-    
-    print("📊 健康检查: http://localhost:8800/api/health")
-    print("📈 股票列表: http://localhost:8800/api/stocks")
-    print("📋 项目列表: http://localhost:8800/api/projects")
-    print("🚀 项目运行: POST http://localhost:8800/api/run_project")
+    auto_register_projects(directory = 'projects')
     
     app.run(debug=True, host='0.0.0.0', port=8800) 

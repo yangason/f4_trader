@@ -122,21 +122,7 @@ class IndicatorCalculator:
                 'histogram': []
             }
         
-        # 计算EMA
-        close_prices = np.array([bar['close'] for bar in self.bars_data])
-        
-        # 计算快线和慢线EMA
-        ema_fast = self._calculate_ema(close_prices, fast_window)
-        ema_slow = self._calculate_ema(close_prices, slow_window)
-        
-        # 计算MACD线
-        macd_line = ema_fast - ema_slow
-        
-        # 计算信号线
-        signal_line = self._calculate_ema(macd_line, signal_window)
-        
-        # 计算柱状图
-        histogram = macd_line - signal_line
+        macd_line, signal_line, histogram = self.am.macd(fast_window, slow_window, signal_window)
         
         result = {
             'macd': [],
@@ -144,22 +130,9 @@ class IndicatorCalculator:
             'histogram': []
         }
         
-        for i, (bar_data, macd_val, signal_val, hist_val) in enumerate(zip(
-            self.bars_data, macd_line, signal_line, histogram)):
-            
-            if not (np.isnan(macd_val) or np.isnan(signal_val) or np.isnan(hist_val)):
-                result['macd'].append({
-                    'time': bar_data['time'],
-                    'value': float(macd_val)
-                })
-                result['signal'].append({
-                    'time': bar_data['time'],
-                    'value': float(signal_val)
-                })
-                result['histogram'].append({
-                    'time': bar_data['time'],
-                    'value': float(hist_val)
-                })
+        result['macd'].append(macd_line)
+        result['signal'].append(signal_line)
+        result['histogram'].append(histogram)
         
         return result
     
@@ -182,23 +155,7 @@ class IndicatorCalculator:
             ema[i] = alpha * data[i] + (1 - alpha) * ema[i-1]
         
         return ema
-    
-    def get_all_indicator(self) -> Dict[str, Any]:
-        """
-        获取所有技术指标数据
         
-        Returns:
-            包含所有指标的字典
-        """
-        return {
-            'ma5': self.get_ma_data(5),
-            'ma10': self.get_ma_data(10),
-            'ma20': self.get_ma_data(20),
-            'ma60': self.get_ma_data(60),
-            'rsi': self.get_rsi_data(14),
-            'macd': self.get_macd_data()
-        }
-    
     def clear_data(self) -> None:
         """清除所有数据"""
         self.am = ArrayManager(100)
@@ -222,7 +179,9 @@ def calculate_indicators_from_bars(bars_data: List[Dict[str, Any]]) -> Dict[str,
             'ma20': [],
             'ma60': [],
             'rsi': [],
-            'macd': []
+            'macd': [],
+            'signal': [],
+            'histogram': []
         }
     calculator = IndicatorCalculator()
     
@@ -264,12 +223,21 @@ def calculate_indicators_from_bars(bars_data: List[Dict[str, Any]]) -> Dict[str,
                 'time': bar_data['time'],
                 'value': calculator.get_rsi_data(14)
             })
+
+            macd_dict = calculator.get_macd_data()
             result['macd'].append({
                 'time': bar_data['time'],
-                'value': calculator.get_macd_data()
+                'value': macd_dict['macd']
+            })
+            result['signal'].append({
+                'time': bar_data['time'],
+                'value': macd_dict['signal']
+            })
+            result['histogram'].append({
+                'time': bar_data['time'],
+                'value': macd_dict['histogram']
             })
 
-    
     return result
 
 

@@ -25,13 +25,20 @@ class ProjectBase:
         self.name = name
         self.api_url = api_url
         self.trades = []  # 交易记录
+        self.time = []  # 时间
         self.daily_pnl = []  # 日收益
         self.balance = []  # 账户余额
         self.drawdown = []  # 回撤
         self.start_time = None
         self.end_time = None
         self.initial_capital = 1000000
-        self.current_capital = 1000000
+        self.end_balance = 1000000
+        self.max_drawdown = 0
+        self.max_drawdown_duration = 0
+        self.total_net_pnl = 0
+        self.sharpe_ratio = 0
+
+        self.custom_data = {}
         
     def register(self, register_dict: Dict[str, 'ProjectBase']):
         """
@@ -52,13 +59,7 @@ class ProjectBase:
             end_date: 结束日期 (YYYY-MM-DD)
             **kwargs: 其他参数
         """
-        self.start_time = datetime.strptime(start_date, '%Y-%m-%d')
-        self.end_time = datetime.strptime(end_date, '%Y-%m-%d')
-        print(f"🚀 开始运行项目 {self.name}")
-        print(f"📅 时间范围: {start_date} 到 {end_date}")
-        
-        # 子类需要重写此方法实现具体策略
-        raise NotImplementedError("子类必须重写run方法")
+        pass
         
     def add_trade(self, symbol: str, direction: str, price: float, volume: float, 
                   timestamp: datetime, offset: str = "OPEN"):
@@ -82,53 +83,24 @@ class ProjectBase:
             'offset': offset
         }
         self.trades.append(trade)
-        
-    def add_daily_pnl(self, date: datetime, pnl: float):
-        """
-        添加日收益
-        
-        Args:
-            date: 日期
-            pnl: 收益
-        """
-        self.daily_pnl.append({
-            'time': int(date.timestamp()),
-            'value': pnl
-        })
-        
-        # 更新账户余额
-        self.current_capital += pnl
-        self.balance.append({
-            'time': int(date.timestamp()),
-            'value': self.current_capital
-        })
-        
-        # 计算回撤
-        if self.balance:
-            peak = max([b['value'] for b in self.balance])
-            current_dd = (self.current_capital - peak) / peak * 100
-            self.drawdown.append({
-                'time': int(date.timestamp()),
-                'value': current_dd
-            })
             
     def upload_data(self):
         """
-        上传数据到API服务器
+        上传项目时序数据
         """
         try:
-            # 准备上传数据
             upload_data = {
-                'symbol': self.name,  # 使用项目名称作为symbol
+                'project_name': self.name,
                 'tech_data': {
-                    'daily_df': self.daily_pnl,
+                    'time': self.time,
+                    'daily_pnl': self.daily_pnl,
                     'balance': self.balance,
                     'drawdown': self.drawdown
                 },
                 'trade_data': self.trades
             }
             
-            # 发送到API服务器
+            print(f"upload_data: {upload_data}")
             response = requests.post(
                 f"{self.api_url}/update_strategy_data",
                 json=upload_data,
@@ -159,32 +131,33 @@ class ProjectBase:
                 'status': '未运行',
                 'trades_count': 0,
                 'total_pnl': 0,
-                'max_drawdown': 0
+                'max_drawdown': 0,
+                'max_drawdown_duration': 0,
+                'win_rate': 0,
+                'initial_capital': 0,
+                'final_balance': 0,
+                'sharpe_ratio': 0
             }
             
-        total_pnl = sum([d['value'] for d in self.daily_pnl])
-        max_drawdown = min([d['value'] for d in self.drawdown]) if self.drawdown else 0
-        
-        return {
+        total_pnl = sum([d for d in self.daily_pnl])
+        win_days = sum([1 for d in self.daily_pnl if d > 0])
+        loss_days = sum([1 for d in self.daily_pnl if d < 0])
+        win_rate = win_days / (win_days + loss_days)
+        result = {
             'name': self.name,
             'status': '已完成',
             'start_time': self.start_time.isoformat() if self.start_time else None,
             'end_time': self.end_time.isoformat() if self.end_time else None,
             'trades_count': len(self.trades),
             'total_pnl': total_pnl,
-            'max_drawdown': max_drawdown,
-            'final_balance': self.current_capital
+            'max_drawdown': self.max_drawdown,
+            'max_drawdown_duration': self.max_drawdown_duration,
+            'win_rate': win_rate,
+            'initial_capital': self.initial_capital,
+            'final_balance': self.end_balance,
+            'sharpe_ratio': self.sharpe_ratio
         }
-        
-    def print_summary(self):
-        """打印项目摘要"""
-        summary = self.get_summary()
-        print(f"\n📊 项目 {self.name} 摘要:")
-        print(f"   状态: {summary['status']}")
-        print(f"   交易次数: {summary['trades_count']}")
-        print(f"   总收益: {summary['total_pnl']:.2f}")
-        print(f"   最大回撤: {summary['max_drawdown']:.2f}%")
-        print(f"   最终余额: {summary['final_balance']:.2f}")
+        return result
 
 
 # 全局注册表

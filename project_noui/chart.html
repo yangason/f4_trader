@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多窗口行情系统</title>
+    <style>
+        body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: Arial, sans-serif;
+            background-color: #1e222d;
+            color: #ffffff;
+            overflow: hidden;
+        }
+
+        .header {
+            height: 80px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.3s;
+        }
+
+        .btn:hover {
+            background: #0056b3;
+        }
+
+        .btn.success {
+            background: #28a745;
+        }
+
+        .btn.success:hover {
+            background: #1e7e34;
+        }
+
+        .btn.warning {
+            background: #ffc107;
+            color: #000;
+        }
+
+        .btn.warning:hover {
+            background: #e0a800;
+        }
+
+        .layout-selector,  .date-input {
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            background: #2d3748;
+            color: white;
+            cursor: pointer;
+        }
+
+        .symbol-selector, .type-selector {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 3px;
+            background: #4a5568;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .main-container {
+            height: calc(100vh - 80px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .window-grid > * {
+            min-width: 0;
+            min-height: 0;
+            justify-self: stretch;
+            align-self:   stretch;
+        }
+
+        .window-grid {
+            width: 100%;
+            height: 100%;
+            grid-template-columns: 1fr;
+            grid-template-rows: 1fr;
+            display: grid;
+            gap: 2px;
+            background: #2d3748;
+            padding: 2px;
+            overflow: auto;
+            grid-auto-flow: dense;
+        }
+
+        .window-grid.layout-1x2 {
+            grid-template-columns: repeat(2, minmax(100px, 1fr));
+            grid-template-rows: 1fr;
+            height: 100%;
+        }
+
+        .window-grid.layout-2x2 {
+            grid-template-columns: repeat(2, minmax(100px, 1fr));
+            grid-template-rows: repeat(2, minmax(100px, 1fr));
+            height: 100%;
+        }
+
+        .window-grid.layout-2x3 {
+            grid-template-columns: repeat(3, minmax(100px, 1fr));
+            grid-template-rows: repeat(2, minmax(100px, 1fr));
+            height: 100%;
+        }
+
+        .chart-window {
+            width: 100%;
+            height: 100%;
+            background: #1e222d;
+            border: 1px solid #2d3748;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            
+        }
+
+        .window-header {
+            height: 20px;
+            background: #2d3748;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            border-bottom: 1px solid #4a5568;
+        }
+
+        .window-title {
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .window-controls {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+        }
+
+        .timeframe-selector, .indicator-selector {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 3px;
+            background: #4a5568;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .close-btn {
+            padding: 4px 8px;
+            border: none;
+            border-radius: 3px;
+            background: #e53e3e;
+            color: white;
+            cursor: pointer;
+            font-size: 12px;
+        }
+
+        .close-btn:hover {
+            background: #c53030;
+        }
+
+        .chart-container {
+            width: 100%;
+            height: 100%;
+            flex: 1;
+            position: relative;
+        }
+
+        .chart {
+            width: 100%;
+            height: 100%;
+        }
+
+        .subchart-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .subchart {
+            width: 100%;
+            border-bottom: 1px solid #2B2B43;
+        }
+
+        .subchart:last-child {
+            border-bottom: none;
+        }
+
+        .subchart.candle {
+            height: 60%;
+        }
+
+        .subchart.volume {
+            height: 20%;
+        }
+
+        .subchart.indicator {
+            height: 20%;
+        }
+
+        .status-bar {
+            height: 15px;
+            background: #2d3748;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            font-size: 12px;
+            color: #a0aec0;
+        }
+
+        .sync-indicator {
+            margin-left: auto;
+            padding: 2px 6px;
+            background: #38a169;
+            border-radius: 3px;
+            font-size: 10px;
+        }
+
+        .sync-indicator.inactive {
+            background: #718096;
+        }
+
+        .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #718096;
+            font-size: 16px;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #4299e1;
+        }
+
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 2px solid #4299e1;
+            border-top: 2px solid transparent;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .trade-marker {
+            position: absolute;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid white;
+            z-index: 10;
+        }
+
+        .trade-marker.buy {
+            background: #26a69a;
+        }
+
+        .trade-marker.sell {
+            background: #ef5350;
+        }
+
+        .project-panel {
+            position: fixed;
+            top: 100px;
+            left: 20px;
+            right: auto;
+            background: #2d3748;
+            border-radius: 8px;
+            padding: 15px;
+            z-index: 1000;
+            max-height: 600px;
+            max-width: 1200px;
+            overflow-y: auto;
+        }
+
+        .project-panel h3 {
+            margin: 0 0 15px 0;
+            color: #4299e1;
+        }
+
+        .project-item {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #4a5568;
+            border-radius: 4px;
+        }
+
+        .project-item h4 {
+            margin: 0 0 5px 0;
+            font-size: 14px;
+        }
+
+        .project-item p {
+            margin: 0;
+            font-size: 12px;
+            color: #a0aec0;
+        }
+
+        .project-chart {
+            width: 100%;
+            height: 150px;
+            margin: 10px 0;
+            border-radius: 4px;
+            background: #1a202c;
+        }
+
+        .chart-title {
+            font-size: 14px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #4299e1;
+        }
+
+        .project-section {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #4a5568;
+            border-radius: 4px;
+        }
+
+        .project-section h4 {
+            margin: 0 0 10px 0;
+            color: #4299e1;
+            font-size: 14px;
+        }
+
+        .project-select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: none;
+            border-radius: 4px;
+            background: #2d3748;
+            color: white;
+        }
+
+        .project-section label {
+            display: block;
+            margin-bottom: 5px;
+            color: #a0aec0;
+            font-size: 12px;
+        }
+
+        .project-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 8px;
+            background: #2d3748;
+            border-radius: 4px;
+        }
+
+        .stat-value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #4299e1;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #a0aec0;
+            margin-top: 2px;
+        }
+
+        .project-item {
+            padding: 8px;
+            margin-bottom: 8px;
+            background: #2d3748;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        .project-item:hover {
+            background: #4a5568;
+        }
+
+        .project-item.active {
+            background: #4299e1;
+        }
+
+        .project-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .stat-item {
+            padding: 6px;
+            background: #2d3748;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 16px;
+            font-weight: bold;
+            color: #4299e1;
+        }
+
+        .stat-label {
+            font-size: 10px;
+            color: #a0aec0;
+        }
+
+        .performance-chart {
+            width: 100%;
+            height: 200px;
+            background: #2d3748;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+
+        .error-message {
+            background: #e53e3e;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .success-message {
+            background: #38a169;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+
+        .info-message {
+            background: #4299e1;
+            color: white;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚀 多窗口分析系统 </h1>
+        <div class="controls">
+            <select class="layout-selector" id="layoutSelector">
+                <option value="1x1">1x1 布局</option>
+                <option value="1x2">1x2 布局</option>
+                <option value="2x2">2x2 布局</option>
+                <option value="2x3">2x3 布局</option>
+            </select>
+            <input type="date" class="date-input" id="startDate" placeholder="开始日期">
+            <input type="date" class="date-input" id="endDate" placeholder="结束日期">
+            <button class="btn" onclick="createWindow()">创建窗口</button>
+            <!-- <button class="btn" onclick="toggleSync()" id="syncBtn">同步十字线: 开启</button> -->
+            <button class="btn" onclick="runProject()">项目管理</button>
+            <!-- <button class="btn" onclick="reloadPage()">重新加载页面</button> -->
+            <button class="btn" onclick="toggleTheme()">切换主题</button>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="window-grid layout-1x1" id="windowGrid">
+            <!-- 窗口将在这里动态创建 -->
+        </div>
+    </div>
+
+    <!-- 项目面板 -->
+    <div class="project-panel" id="projectPanel" style="display: none;">
+        <h3>📋 项目管理</h3>
+        <div id="projectContent" style="display: flex; gap: 20px;">
+            <!-- 左侧summary内容 -->
+            <div class="project-summary-panel" style="flex: 1; min-width: 300px;">
+                <div class="project-section">
+                    <h4>🚀 运行项目</h4>
+                    <div style="margin-bottom: 15px;">
+                        <label>选择项目:</label>
+                        <select id="projectSelector" class="project-select" onchange="onProjectSelect()">
+                            <option value="">加载中...</option>
+                        </select>
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label>开始日期:</label>
+                        <input type="date" id="projectStartDate" class="date-input" placeholder="开始日期">
+                    </div>
+                    <div style="margin-bottom: 15px;">
+                        <label>结束日期:</label>
+                        <input type="date" id="projectEndDate" class="date-input" placeholder="结束日期">
+                    </div>
+                    <button class="btn" onclick="executeRunProject()" style="width: 100%;">运行项目</button>
+                </div>
+                <div class="project-section">
+                    <h4>📈 项目详情</h4>
+                    <div id="projectDetails">
+                        <p>选择项目查看详情</p>
+                    </div>
+                    <button class="btn" onclick="toggleProjectChartPanel()" style="width: 100%; margin-top: 10px;">
+                        显示图表
+                    </button>
+                </div>
+            </div>
+            
+            <!-- 右侧图表窗口 -->
+            <div class="project-chart-panel" id="projectChartPanel" style="display: none; flex: 1; min-width: 600px;">
+                <div class="project-section">
+                    <h4>📊 项目图表</h4>
+                    <div id="projectChart" style="height: calc(100% - 40px); min-height: 300px;  ">
+                        <!-- traded_symbol图表 -->
+                        <div id="tradedSymbolChartContainer">
+                            <div class="header" style="height: 5%;">
+                                <div class="chart-title">💰 交易标的</div>
+                                <select class="traded-symbol-selector" id="tradedSymbolSelector">
+                                    <option value="">选择交易标的</option>
+                                </select>
+                            </div>
+                            <div id="tradedSymbolChart" class="project-chart" style="min-height: 400px;">
+
+                            </div>
+                        </div>
+                        <!-- Balance曲线图表 -->
+                        <div id="balanceChartContainer" style="display: none;">
+                            <div class="chart-title">💰 账户余额曲线</div>
+                            <div id="balanceChart" class="project-chart"></div>
+                        </div>
+                        <!-- daily_pnl曲线图表 -->
+                        <div id="dailyPnlChartContainer" style="display: none;">
+                            <div class="chart-title">📉 每日收益</div>
+                            <div id="dailyPnlChart" class="project-chart"></div>
+                        </div>
+                        <!-- Drawdown曲线图表 -->
+                        <div id="drawdownChartContainer" style="display: none;">
+                            <div class="chart-title">📉 回撤曲线</div>
+                            <div id="drawdownChart" class="project-chart"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+
+    <!-- 引入 TradingView Lightweight Charts V5 -->
+    <script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
+    <script src="./chart.js"></script>
+    
+</body>
+</html> 
